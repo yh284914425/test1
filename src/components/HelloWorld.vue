@@ -187,7 +187,7 @@ const rowProps = (row: any) => {
 }
 
 // 修改计算每页显示的行数
-const calculatePageSize = async (keepCurrentPage = false) => {
+const calculatePageSize = async () => {
   await nextTick()
   
   const tableContainer = document.querySelector('.table-container')
@@ -203,7 +203,7 @@ const calculatePageSize = async (keepCurrentPage = false) => {
   
   // 如果页大小发生变化，需要清空缓存并重新加载数据
   if (pagination.value.pageSize !== newPageSize) {
-    const currentPage = keepCurrentPage ? pagination.value.page : 1
+    const currentPage = pagination.value.page
     const totalPages = Math.ceil(TOTAL_ITEMS / newPageSize)
     
     // 确保页码不超出范围
@@ -230,12 +230,12 @@ const calculatePageSize = async (keepCurrentPage = false) => {
 }
 
 const scrollAccumulator = ref(0)
-const FIRST_SCROLL_THRESHOLD = 300 // 第一次滚动需要的阈值
-const SECOND_SCROLL_THRESHOLD = 50 // 第二次滚动需要的阈值
-
-const scrollThreshold = ref(0.8) // 滚动阈值
+const FIRST_SCROLL_THRESHOLD = 600; // 增加第一次滚动需要的阈值
+const SECOND_SCROLL_THRESHOLD = 100; // 增加第二次滚动需要的阈值
 const isNextPageHighlighted = ref(false)
 const tableRef = ref<HTMLElement | null>(null)
+
+let isThrottled = false; // 节流标志
 
 // 监听表格挂载
 const initWheelEvent = () => {
@@ -309,84 +309,71 @@ const removeHighlight = () => {
 
 // 处理鼠标滚轮事件
 const handleWheel = (event: Event) => {
-  if (!focusMode.value) return
-  console.log('收到滚轮事件')
-  
-  const wheelEvent = event as WheelEvent
+  if (!focusMode.value) return;
+  console.log('收到滚轮事件');
+
+  const wheelEvent = event as WheelEvent;
   // 阻止默认滚动
-  wheelEvent.preventDefault()
-  
+  wheelEvent.preventDefault();
+
   // 添加节流，防止快速滚动
-  if (loading.value) {
-    console.log('正在加载中，忽略滚动')
-    return
+  if (loading.value || isThrottled) {
+    console.log('正在加载中或节流中，忽略滚动');
+    return;
   }
-  
-  // 使用累积的滚动值来判断
-  const currentScrollValue = Math.abs(wheelEvent.deltaY)
-  console.log('当前滚动值:', currentScrollValue)
-  
-  // 向下滚动时 deltaY 为正
-  if (wheelEvent.deltaY > 0) {
-    console.log('向下滚动, deltaY:', wheelEvent.deltaY)
-    if (!isNextPageHighlighted.value) {
-      // 累加滚动值
-      scrollAccumulator.value += currentScrollValue
-      console.log('累积滚动值:', scrollAccumulator.value)
-      
-      // 第一次向下滚动，需要累积到阈值才高亮下一页
-      if (scrollAccumulator.value >= FIRST_SCROLL_THRESHOLD) {
-        const nextPage = pagination.value.page + 1
-        const totalPages = Math.ceil(TOTAL_ITEMS / pagination.value.pageSize)
-        console.log('当前页:', pagination.value.page, '总页数:', totalPages)
-        
+
+  isThrottled = true; // 设置节流标志
+  setTimeout(() => {
+    isThrottled = false; // 重置节流标志
+  }, 200); // 200ms 的节流时间
+
+  // 使用 setTimeout 来延迟执行翻页逻辑
+  setTimeout(() => {
+    if (wheelEvent.deltaY > 0) {
+      console.log('向下滚动, deltaY:', wheelEvent.deltaY);
+      if (!isNextPageHighlighted.value) {
+        // 第一次向下滚动，高亮下一页
+        const nextPage = pagination.value.page + 1;
+        const totalPages = Math.ceil(TOTAL_ITEMS / pagination.value.pageSize);
         if (nextPage <= totalPages) {
-          isNextPageHighlighted.value = true
-          scrollAccumulator.value = 0 // 重置累加器
-          highlightNextPage()
-          console.log('已设置高亮状态')
+          isNextPageHighlighted.value = true;
+          highlightNextPage();
+          console.log('已设置高亮状态');
+        }
+      } else {
+        // 第二次向下滚动，执行翻页
+        isNextPageHighlighted.value = false;
+        removeHighlight();
+        const nextPage = pagination.value.page + 1;
+        const totalPages = Math.ceil(TOTAL_ITEMS / pagination.value.pageSize);
+        if (nextPage <= totalPages) {
+          console.log('执行翻页到:', nextPage);
+          handlePageChange(nextPage);
         }
       }
-    } else if (currentScrollValue > SECOND_SCROLL_THRESHOLD) {
-      // 第二次向下滚动且超过阈值，执行翻页
-      isNextPageHighlighted.value = false
-      removeHighlight()
-      const nextPage = pagination.value.page + 1
-      const totalPages = Math.ceil(TOTAL_ITEMS / pagination.value.pageSize)
-      if (nextPage <= totalPages) {
-        console.log('执行翻页到:', nextPage)
-        handlePageChange(nextPage)
-      }
-    }
-  } else if (wheelEvent.deltaY < 0) {
-    console.log('向上滚动, deltaY:', wheelEvent.deltaY)
-    if (!isNextPageHighlighted.value) {
-      // 累加滚动值
-      scrollAccumulator.value += currentScrollValue
-      console.log('累积滚动值:', scrollAccumulator.value)
-      
-      // 第一次向上滚动，需要累积到阈值才高亮上一页
-      if (scrollAccumulator.value >= FIRST_SCROLL_THRESHOLD) {
-        const prevPage = pagination.value.page - 1
+    } else if (wheelEvent.deltaY < 0) {
+      console.log('向上滚动, deltaY:', wheelEvent.deltaY);
+      if (!isNextPageHighlighted.value) {
+        // 第一次向上滚动，高亮上一页
+        const prevPage = pagination.value.page - 1;
         if (prevPage >= 1) {
-          isNextPageHighlighted.value = true
-          scrollAccumulator.value = 0 // 重置累加器
-          highlightPrevPage()
-          console.log('已设置上一页高亮状态')
+          isNextPageHighlighted.value = true;
+          highlightPrevPage();
+          console.log('已设置上一页高亮状态');
+        }
+      } else {
+        // 第二次向上滚动，执行翻页
+        isNextPageHighlighted.value = false;
+        removeHighlight();
+        const prevPage = pagination.value.page - 1;
+        if (prevPage >= 1) {
+          console.log('返回上一页:', prevPage);
+          handlePageChange(prevPage);
         }
       }
-    } else if (currentScrollValue > SECOND_SCROLL_THRESHOLD) {
-      // 第二次向上滚动且超过阈值，执行翻页
-      isNextPageHighlighted.value = false
-      removeHighlight()
-      const prevPage = pagination.value.page - 1
-      if (prevPage >= 1) {
-        console.log('返回上一页:', prevPage)
-        handlePageChange(prevPage)
-      }
     }
-  }
-}
+  }, 0);
+};
 
 // 高亮上一页页码
 const highlightPrevPage = () => {
@@ -410,13 +397,13 @@ const highlightPrevPage = () => {
 
 const toggleFocusMode = () => {
   focusMode.value = !focusMode.value
-  calculatePageSize(false) // 切换模式时重置到第一页
+  calculatePageSize() // 切换模式时重置到第一页
 }
 
 // 处理窗口大小变化
-const handleResize = () => {
-  calculatePageSize(true) // 窗口大小变化时保持当前页
-}
+const handleResize = (event: UIEvent) => {
+  calculatePageSize() // 窗口大小变化时保持当前页
+};
 
 onMounted(async () => {
   await calculatePageSize()
