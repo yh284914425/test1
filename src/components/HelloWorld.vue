@@ -36,13 +36,12 @@ const focusMode = ref(false)
 const tableData = ref<any[]>([])
 const loading = ref(false)
 const dataCache = ref<Map<number, any[]>>(new Map())
-
-const TOTAL_ITEMS = 1000 // 总数据量
+const totalItems = ref(0) // 替换固定的 TOTAL_ITEMS
 
 const pagination = ref({
   page: 1,
   pageSize: 10,
-  itemCount: TOTAL_ITEMS,
+  itemCount: 0, // 初始值设为 0
   showSizePicker: true,
   pageSizes: [10, 20, 30, 40],
   prefix: ({ itemCount }: { itemCount: number }) => `共 ${itemCount} 条数据`
@@ -94,14 +93,19 @@ const expandedRowKeys = ref<string[]>([])
 const fetchPageData = async (page: number, pageSize: number) => {
   // 如果缓存中已有数据，直接返回
   if (dataCache.value.has(page)) {
-    return dataCache.value.get(page)
+    return {
+      data: dataCache.value.get(page),
+      total: totalItems.value
+    }
   }
 
   // 模拟网络请求延迟
   await new Promise(resolve => setTimeout(resolve, 500))
   
+  // 模拟接口返回的数据结构
+  const total = 1000 // 这里应该是实际接口返回的总数
   const start = (page - 1) * pageSize
-  const end = Math.min(start + pageSize, TOTAL_ITEMS)
+  const end = Math.min(start + pageSize, total)
   const pageData = Array.from({ length: end - start }, (_, index) => ({
     key: start + index,
     name: `用户 ${start + index}`,
@@ -113,30 +117,62 @@ const fetchPageData = async (page: number, pageSize: number) => {
 
   // 将数据存入缓存
   dataCache.value.set(page, pageData)
-  return pageData
+  
+  // 更新总数量
+  totalItems.value = total
+  pagination.value.itemCount = total
+
+  return {
+    data: pageData,
+    total
+  }
 }
 
 // 预加载下一页数据
 const preloadNextPage = async (currentPage: number) => {
-  const totalPages = Math.ceil(TOTAL_ITEMS / pagination.value.pageSize)
+  const totalPages = Math.ceil(totalItems.value / pagination.value.pageSize)
   const nextPage = currentPage + 1
   
   // 只在不是最后一页时预加载
   if (nextPage <= totalPages && !dataCache.value.has(nextPage)) {
     console.log('预加载第', nextPage, '页数据')
-    await fetchPageData(nextPage, pagination.value.pageSize)
+    const response = await fetchPageData(nextPage, pagination.value.pageSize)
+    if (response.data) {
+      dataCache.value.set(nextPage, response.data)
+    }
   }
 }
 
 // 计算当前页数据
 const currentPageData = computed(() => {
   const currentPage = pagination.value.page
-  return dataCache.value.get(currentPage) || []
+  const data = dataCache.value.get(currentPage)
+  return data || []
 })
+
+// 初始化数据
+const initData = async () => {
+  loading.value = true
+  try {
+    const response = await fetchPageData(1, pagination.value.pageSize)
+    if (response.data) {
+      dataCache.value.set(1, response.data)
+      // 确保设置第一页为当前页
+      pagination.value = {
+        ...pagination.value,
+        page: 1,
+        itemCount: response.total
+      }
+    }
+    await preloadNextPage(1)
+  } finally {
+    loading.value = false
+  }
+}
 
 // 处理页面切换
 const handlePageChange = async (page: number) => {
-  const totalPages = Math.ceil(TOTAL_ITEMS / pagination.value.pageSize)
+  const totalPages = Math.ceil(totalItems.value / pagination.value.pageSize)
   if (page < 1 || page > totalPages) return
 
   loading.value = true
@@ -144,7 +180,10 @@ const handlePageChange = async (page: number) => {
   expandedRowKeys.value = [] // 清空展开状态
   
   try {
-    await fetchPageData(page, pagination.value.pageSize)
+    const response = await fetchPageData(page, pagination.value.pageSize)
+    if (response.data) {
+      dataCache.value.set(page, response.data)
+    }
     await preloadNextPage(page)
   } finally {
     loading.value = false
@@ -154,19 +193,22 @@ const handlePageChange = async (page: number) => {
 // 处理每页条数变化
 const handlePageSizeChange = async (pageSize: number) => {
   loading.value = true
-  const totalPages = Math.ceil(TOTAL_ITEMS / pageSize)
+  const totalPages = Math.ceil(totalItems.value / pageSize)
   
   pagination.value = {
     ...pagination.value,
     pageSize,
     page: 1,
-    itemCount: TOTAL_ITEMS
+    itemCount: totalItems.value
   }
   
   dataCache.value.clear() // 清空缓存
   
   try {
-    await fetchPageData(1, pageSize)
+    const response = await fetchPageData(1, pageSize)
+    if (response.data) {
+      dataCache.value.set(1, response.data)
+    }
     await preloadNextPage(1)
   } finally {
     loading.value = false
@@ -204,7 +246,7 @@ const calculatePageSize = async () => {
   // 如果页大小发生变化，需要清空缓存并重新加载数据
   if (pagination.value.pageSize !== newPageSize) {
     const currentPage = pagination.value.page
-    const totalPages = Math.ceil(TOTAL_ITEMS / newPageSize)
+    const totalPages = Math.ceil(totalItems.value / newPageSize)
     
     // 确保页码不超出范围
     const validPage = Math.min(currentPage, totalPages)
@@ -213,14 +255,17 @@ const calculatePageSize = async () => {
       ...pagination.value,
       page: validPage,
       pageSize: newPageSize,
-      itemCount: TOTAL_ITEMS,
+      itemCount: totalItems.value,
       showSizePicker: true,
       pageSizes: [10, 20, 30, 40],
       prefix: ({ itemCount }: { itemCount: number }) => `共 ${itemCount} 条数据`
     }
     
     dataCache.value.clear()
-    handlePageChange(validPage)
+    const response = await fetchPageData(validPage, newPageSize)
+    if (response.data) {
+      dataCache.value.set(validPage, response.data)
+    }
   }
 
   console.log('当前模式:', focusMode.value ? '专注模式' : '普通模式')
@@ -334,7 +379,7 @@ const handleWheel = (event: Event) => {
       if (!isNextPageHighlighted.value) {
         // 第一次向下滚动，高亮下一页
         const nextPage = pagination.value.page + 1;
-        const totalPages = Math.ceil(TOTAL_ITEMS / pagination.value.pageSize);
+        const totalPages = Math.ceil(totalItems.value / pagination.value.pageSize);
         if (nextPage <= totalPages) {
           isNextPageHighlighted.value = true;
           highlightNextPage();
@@ -345,7 +390,7 @@ const handleWheel = (event: Event) => {
         isNextPageHighlighted.value = false;
         removeHighlight();
         const nextPage = pagination.value.page + 1;
-        const totalPages = Math.ceil(TOTAL_ITEMS / pagination.value.pageSize);
+        const totalPages = Math.ceil(totalItems.value / pagination.value.pageSize);
         if (nextPage <= totalPages) {
           console.log('执行翻页到:', nextPage);
           handlePageChange(nextPage);
@@ -407,7 +452,7 @@ const handleResize = (event: UIEvent) => {
 
 onMounted(async () => {
   await calculatePageSize()
-  await handlePageChange(1)
+  await initData() // 替换原来的 handlePageChange(1)
   
   // 监听窗口大小变化
   window.addEventListener('resize', handleResize)
